@@ -6,8 +6,15 @@ A prediction market monitoring service that combines Chainlink CRE workflows wit
 
 ## Features
 
-- **Natural Language Alerts**: "Alert me when Trump election odds exceed 60%"
+- **Advanced Natural Language Parsing**: Understands diverse phrasings
+  - "Alert me when Trump election odds exceed 60%"
+  - "Notify if recession probability drops below 30%"
+  - "Watch Bitcoin ETF approval at 70 cents"
+  - "Trump > 70%" (shorthand)
+- **Multi-Condition Alerts**: "Alert when Trump > 60% AND Biden < 40%"
+- **Smart Keyword Extraction**: Automatically finds relevant markets from your query
 - **x402 Micropayments**: Pay $0.01 USDC per alert subscription on Base
+- **Bulk Discounts**: 10% off for 5+ alerts, 20% off for 10+ alerts
 - **Real-Time Monitoring**: CRE workflow checks markets every 5 minutes
 - **Webhook Notifications**: Get notified when your conditions are met
 - **Market Search**: Find prediction markets by keyword
@@ -47,6 +54,7 @@ curl http://localhost:3000/markets/search?q=trump
 
 ### 2. Create Alert (Triggers 402 Payment)
 
+**Simple Alert:**
 ```bash
 curl -X POST http://localhost:3000/alerts \
   -H "Content-Type: application/json" \
@@ -55,6 +63,27 @@ curl -X POST http://localhost:3000/alerts \
     "notifyUrl": "https://your-webhook.com/alerts"
   }'
 ```
+
+**Multi-Condition Alert:**
+```bash
+curl -X POST http://localhost:3000/alerts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "naturalLanguage": "Alert when Trump > 60% AND recession < 30%",
+    "notifyUrl": "https://your-webhook.com/alerts"
+  }'
+```
+
+### Supported Phrasings
+
+| Pattern | Example |
+|---------|---------|
+| Percentage | "when Trump exceeds 60%" |
+| Cents (Polymarket style) | "hits 70 cents" |
+| Comparisons | "Trump > 65%" |
+| Direction keywords | "drops below", "rises above", "falls under" |
+| Multi-condition | "Trump > 60% AND Biden < 40%" |
+| Outcome detection | "No hits 40%" (detects No outcome) |
 
 Response (402 Payment Required):
 ```json

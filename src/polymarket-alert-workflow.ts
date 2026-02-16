@@ -170,45 +170,241 @@ export async function executeWorkflow(state: WorkflowState): Promise<{
 }
 
 /**
- * Parse natural language alert request using AI
+ * Enhanced natural language parsing for alert requests
  *
- * Input: "Alert me when Trump election odds exceed 60%"
- * Output: AlertConfig structure
+ * Supports various phrasings:
+ * - "Alert me when Trump election odds exceed 60%"
+ * - "Notify when Bitcoin ETF approval drops below 30%"
+ * - "Tell me if Trump wins probability goes above 55%"
+ * - "Watch when No hits 40% on AI regulation"
+ * - "Alert when the price of Yes on election is over 70 cents"
+ * - "If recession likelihood falls under 25%, let me know"
  */
-export function parseAlertRequest(request: string, notifyUrl: string): AlertConfig | null {
-  // This would use Gemini/OpenAI in production
-  // For now, a simple pattern matcher
 
+// Pattern definitions for parsing
+interface ParsePattern {
+  regex: RegExp;
+  extractor: (match: RegExpMatchArray) => Partial<AlertConfig> | null;
+}
+
+// Keywords for direction detection
+const ABOVE_KEYWORDS = [
+  'exceed', 'exceeds', 'above', 'over', 'greater than', 'more than',
+  'reaches', 'hits', 'gets to', 'goes above', 'rises to', 'climbs to',
+  'surpasses', 'passes', 'breaks', 'tops', '>'
+];
+
+const BELOW_KEYWORDS = [
+  'fall below', 'below', 'under', 'less than', 'drops to', 'drops below',
+  'falls to', 'falls under', 'dips to', 'dips below', 'sinks to',
+  'declines to', '<'
+];
+
+// Keywords for outcome detection
+const YES_KEYWORDS = ['yes', 'true', 'will', 'pass', 'approve', 'win', 'happen'];
+const NO_KEYWORDS = ['no', 'false', "won't", 'fail', 'reject', 'lose', "doesn't"];
+
+function detectDirection(text: string): 'above' | 'below' | null {
+  const lower = text.toLowerCase();
+  for (const kw of BELOW_KEYWORDS) {
+    if (lower.includes(kw)) return 'below';
+  }
+  for (const kw of ABOVE_KEYWORDS) {
+    if (lower.includes(kw)) return 'above';
+  }
+  return null;
+}
+
+function detectOutcome(text: string): 'Yes' | 'No' {
+  const lower = text.toLowerCase();
+  // Explicit No mention takes priority
+  if (/\b(no outcome|"no"|'no'|\bno\b(?:\s+option|\s+side)?)/i.test(text)) {
+    return 'No';
+  }
+  for (const kw of NO_KEYWORDS) {
+    if (lower.includes(kw)) return 'No';
+  }
+  return 'Yes';
+}
+
+function extractPercentage(text: string): number | null {
+  // Match various percentage formats
   const patterns = [
-    // "when X odds exceed/above Y%"
-    /when\s+(.+?)\s+odds?\s+(exceed|above|over|greater than)\s+(\d+)%?/i,
-    // "when X odds fall below/under Y%"
-    /when\s+(.+?)\s+odds?\s+(fall below|below|under|less than)\s+(\d+)%?/i,
-    // "if X reaches Y%"
-    /if\s+(.+?)\s+(reaches|hits|gets to)\s+(\d+)%?/i,
+    /(\d+(?:\.\d+)?)\s*%/,           // "60%"
+    /(\d+(?:\.\d+)?)\s*percent/i,    // "60 percent"
+    /(\d+(?:\.\d+)?)\s*cents?/i,     // "70 cents" (Polymarket price format)
+    /0\.(\d+)/,                       // "0.60" (decimal odds)
+    /\.(\d+)/,                        // ".60"
   ];
 
   for (const pattern of patterns) {
-    const match = request.match(pattern);
+    const match = text.match(pattern);
     if (match) {
-      const [, subject, direction, threshold] = match;
+      let value = parseFloat(match[1]);
+      // Handle "cents" format (70 cents = 70%)
+      if (pattern.source.includes('cents')) {
+        return value;
+      }
+      // Handle decimal format (0.60 = 60%)
+      if (pattern.source.includes('0\\.')) {
+        return value * 100;
+      }
+      return value;
+    }
+  }
+  return null;
+}
 
-      // Determine direction
-      const isAbove = ['exceed', 'above', 'over', 'greater than', 'reaches', 'hits', 'gets to'].some(
-        d => direction.toLowerCase().includes(d)
-      );
+function extractSubject(text: string): string {
+  // Remove common alert prefixes
+  let cleaned = text.replace(/^(alert|notify|tell|watch|let me know|ping me|message me|inform me)\s*(me|us)?\s*(when|if|once)?\s*/i, '');
 
-      return {
-        marketId: '', // Would be resolved via market search
-        outcome: 'Yes', // Default to Yes outcome
-        threshold: parseInt(threshold),
-        direction: isAbove ? 'above' : 'below',
-        notifyUrl,
-      };
+  // Remove threshold phrases
+  cleaned = cleaned.replace(/\s*(exceeds?|above|over|below|under|reaches|hits|drops?|falls?|goes?|rises?|climbs?|dips?|declines?|sinks?)\s*(\d+(?:\.\d+)?)\s*(%|percent|cents?)?\s*/gi, '');
+
+  // Remove trailing phrases
+  cleaned = cleaned.replace(/\s*,?\s*(let me know|notify me|alert me|tell me).*$/i, '');
+
+  // Clean up
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+  return cleaned || text;
+}
+
+export function parseAlertRequest(request: string, notifyUrl: string): AlertConfig | null {
+  // Advanced pattern matching
+  const patterns: ParsePattern[] = [
+    // Pattern 1: "when X odds/probability/chance exceed/above Y%"
+    {
+      regex: /(?:when|if|once)\s+(.+?)\s+(?:odds?|probability|chance|likelihood)\s+(?:to\s+)?(\w+(?:\s+\w+)*)\s+(\d+(?:\.\d+)?)\s*(%|percent|cents?)?/i,
+      extractor: (m) => ({
+        threshold: parseFloat(m[3]),
+        direction: detectDirection(m[2]),
+        outcome: detectOutcome(m[1]),
+      })
+    },
+    // Pattern 2: "when X exceeds/drops below Y%"
+    {
+      regex: /(?:when|if|once)\s+(.+?)\s+(exceeds?|goes?\s+above|rises?\s+to|drops?\s+(?:to|below)|falls?\s+(?:to|below)|goes?\s+below)\s+(\d+(?:\.\d+)?)\s*(%|percent|cents?)?/i,
+      extractor: (m) => ({
+        threshold: parseFloat(m[3]),
+        direction: detectDirection(m[2]),
+        outcome: detectOutcome(m[1]),
+      })
+    },
+    // Pattern 3: "X > Y%" or "X < Y%"
+    {
+      regex: /(.+?)\s*([<>])\s*(\d+(?:\.\d+)?)\s*(%|percent|cents?)?/,
+      extractor: (m) => ({
+        threshold: parseFloat(m[3]),
+        direction: m[2] === '>' ? 'above' : 'below',
+        outcome: detectOutcome(m[1]),
+      })
+    },
+    // Pattern 4: Simple "X hits Y%"
+    {
+      regex: /(.+?)\s+(hits?|reaches?|at|to)\s+(\d+(?:\.\d+)?)\s*(%|percent|cents?)?/i,
+      extractor: (m) => ({
+        threshold: parseFloat(m[3]),
+        direction: 'above' as const,
+        outcome: detectOutcome(m[1]),
+      })
+    },
+  ];
+
+  // Try each pattern
+  for (const { regex, extractor } of patterns) {
+    const match = request.match(regex);
+    if (match) {
+      const parsed = extractor(match);
+      if (parsed && parsed.threshold !== undefined && parsed.direction) {
+        return {
+          marketId: '', // Resolved via market search
+          outcome: parsed.outcome || 'Yes',
+          threshold: parsed.threshold,
+          direction: parsed.direction,
+          notifyUrl,
+        };
+      }
     }
   }
 
+  // Fallback: Extract what we can
+  const percentage = extractPercentage(request);
+  const direction = detectDirection(request);
+
+  if (percentage !== null && direction !== null) {
+    return {
+      marketId: '',
+      outcome: detectOutcome(request),
+      threshold: percentage,
+      direction,
+      notifyUrl,
+    };
+  }
+
   return null;
+}
+
+/**
+ * Parse multiple conditions from a single request
+ *
+ * Examples:
+ * - "Alert when Trump > 60% AND Biden < 40%"
+ * - "Watch both: recession above 70% or inflation below 20%"
+ */
+export function parseMultiConditionAlert(request: string, notifyUrl: string): AlertConfig[] {
+  const results: AlertConfig[] = [];
+
+  // Split on AND/OR/both/either/,
+  const parts = request.split(/\s+(?:and|or|,|&|\|)\s+/i);
+
+  for (const part of parts) {
+    const parsed = parseAlertRequest(part.trim(), notifyUrl);
+    if (parsed) {
+      results.push(parsed);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Extract search keywords from natural language
+ */
+export function extractSearchKeywords(request: string): string[] {
+  const subject = extractSubject(request);
+
+  // Extract potential search terms
+  const keywords: string[] = [];
+
+  // Named entities (capitalized words)
+  const namedEntities = subject.match(/[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g);
+  if (namedEntities) {
+    keywords.push(...namedEntities);
+  }
+
+  // Topic keywords
+  const topicPatterns = [
+    /(?:about|on|for|regarding)\s+(.+?)(?:\s+(?:odds|probability|chance|market)|$)/i,
+    /(.+?)\s+(?:election|approval|outcome|decision|vote|result)/i,
+    /(?:will|if)\s+(.+?)\s+(?:win|pass|happen|be\s+approved)/i,
+  ];
+
+  for (const pattern of topicPatterns) {
+    const match = request.match(pattern);
+    if (match) {
+      keywords.push(match[1].trim());
+    }
+  }
+
+  // Fallback to subject words
+  if (keywords.length === 0) {
+    const words = subject.split(/\s+/).filter(w => w.length > 3);
+    keywords.push(...words.slice(0, 3));
+  }
+
+  return [...new Set(keywords)];
 }
 
 /**

@@ -17,7 +17,7 @@
 
 import { serve } from 'bun';
 import app from './src/api';
-import workflow, { executeWorkflow, searchMarkets } from './src/polymarket-alert-workflow';
+import workflow, { executeWorkflow, searchMarkets, parseAlertRequest, parseMultiConditionAlert, extractSearchKeywords } from './src/polymarket-alert-workflow';
 
 const PORT = parseInt(process.env.PORT || '3000');
 
@@ -25,8 +25,36 @@ const PORT = parseInt(process.env.PORT || '3000');
 if (process.argv.includes('--test')) {
   console.log('Running workflow test...\n');
 
+  // Test NLP parsing
+  console.log('1. Testing natural language parsing...');
+  const testCases = [
+    'Alert me when Trump election odds exceed 60%',
+    'Notify when Bitcoin ETF approval drops below 30%',
+    'Tell me if recession probability goes above 55%',
+    'Watch when No hits 40 cents on AI regulation',
+    'Trump > 70%',
+    'Alert when Trump > 60% AND Biden < 40%',
+    'If inflation falls under 25%, let me know',
+  ];
+
+  let passed = 0;
+  for (const tc of testCases) {
+    const parsed = parseAlertRequest(tc, 'https://test.com');
+    const multi = parseMultiConditionAlert(tc, 'https://test.com');
+    const keywords = extractSearchKeywords(tc);
+
+    if (parsed || multi.length > 0) {
+      passed++;
+      const result = multi.length > 1 ? `${multi.length} conditions` : `${parsed?.direction} ${parsed?.threshold}% (${parsed?.outcome})`;
+      console.log(`   ✓ "${tc.substring(0, 45)}..." → ${result}`);
+    } else {
+      console.log(`   ✗ "${tc.substring(0, 45)}..." → FAILED`);
+    }
+  }
+  console.log(`   Passed: ${passed}/${testCases.length}\n`);
+
   // Test market search
-  console.log('1. Searching for election markets...');
+  console.log('2. Searching for election markets...');
   const markets = await searchMarkets('election');
   console.log(`   Found ${markets.length} markets`);
   if (markets.length > 0) {
@@ -34,7 +62,7 @@ if (process.argv.includes('--test')) {
   }
 
   // Test workflow execution with sample config
-  console.log('\n2. Testing workflow execution...');
+  console.log('\n3. Testing workflow execution...');
   const testState = {
     alertConfigs: [{
       marketId: markets[0]?.condition_id || 'test',

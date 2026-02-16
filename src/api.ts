@@ -10,7 +10,7 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import workflow, { parseAlertRequest, searchMarkets, fetchMarketData } from './polymarket-alert-workflow';
+import workflow, { parseAlertRequest, parseMultiConditionAlert, extractSearchKeywords, searchMarkets, fetchMarketData } from './polymarket-alert-workflow';
 import x402 from './x402-handler';
 
 // Initialize state (would be persisted in production)
@@ -146,26 +146,92 @@ app.post('/alerts', async (c) => {
 
   // Handle natural language input
   if (naturalLanguage && !marketId) {
+    // Try multi-condition parsing first
+    const multiParsed = parseMultiConditionAlert(naturalLanguage, notifyUrl || '');
+
+    if (multiParsed.length > 1) {
+      // Multiple conditions - create multiple alerts
+      const createdAlerts: any[] = [];
+      const keywords = extractSearchKeywords(naturalLanguage);
+
+      for (const parsed of multiParsed) {
+        // Search with extracted keywords
+        let markets: any[] = [];
+        for (const kw of keywords) {
+          markets = await searchMarkets(kw);
+          if (markets.length > 0) break;
+        }
+
+        if (markets.length > 0) {
+          parsed.marketId = markets[0].condition_id;
+          parsed.notifyUrl = notifyUrl || '';
+          state.alertConfigs.push(parsed);
+          createdAlerts.push({
+            id: state.alertConfigs.length - 1,
+            market: markets[0].question,
+            outcome: parsed.outcome,
+            threshold: parsed.threshold,
+            direction: parsed.direction,
+          });
+        }
+      }
+
+      if (createdAlerts.length === 0) {
+        return c.json({
+          error: 'No matching markets found for conditions',
+          parsedConditions: multiParsed.length,
+        }, 404);
+      }
+
+      return c.json({
+        success: true,
+        multiAlert: true,
+        alertsCreated: createdAlerts.length,
+        alerts: createdAlerts,
+      }, 201);
+    }
+
+    // Single condition parsing
     const parsed = parseAlertRequest(naturalLanguage, notifyUrl || '');
     if (!parsed) {
       return c.json({
         error: 'Could not parse natural language request',
         hint: 'Try: "when Trump election odds exceed 60%"',
+        examples: [
+          'Alert when Trump > 60%',
+          'Notify if recession odds fall below 30%',
+          'Watch Bitcoin ETF approval at 70 cents',
+          'Tell me when No hits 40% on AI regulation',
+        ],
       }, 400);
     }
 
-    // Search for matching market
-    const markets = await searchMarkets(naturalLanguage);
+    // Extract smart search keywords from the request
+    const keywords = extractSearchKeywords(naturalLanguage);
+    let markets: any[] = [];
+
+    // Try each keyword until we find markets
+    for (const kw of keywords) {
+      markets = await searchMarkets(kw);
+      if (markets.length > 0) break;
+    }
+
+    // Fallback to full query
+    if (markets.length === 0) {
+      markets = await searchMarkets(naturalLanguage);
+    }
+
     if (markets.length === 0) {
       return c.json({
         error: 'No matching markets found',
         query: naturalLanguage,
+        searchedKeywords: keywords,
       }, 404);
     }
 
     // Use first matching market
     parsed.marketId = markets[0].condition_id;
-    parsed.notifyUrl = notifyUrl;
+    parsed.notifyUrl = notifyUrl || '';
 
     state.alertConfigs.push(parsed);
 
@@ -178,6 +244,7 @@ app.post('/alerts', async (c) => {
         threshold: parsed.threshold,
         direction: parsed.direction,
       },
+      matchedKeywords: keywords,
     }, 201);
   }
 
