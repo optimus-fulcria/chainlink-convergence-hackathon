@@ -4,6 +4,14 @@
 
 A prediction market monitoring service that combines Chainlink CRE workflows with x402 micropayments, enabling users to subscribe to custom alerts for prediction market conditions.
 
+## Demo
+
+[![Demo Video](https://img.shields.io/badge/Watch-Demo-red)](https://asciinema.org/a/SYej79kvhGWSiN6R)
+
+**Live Terminal Demo:** https://asciinema.org/a/SYej79kvhGWSiN6R
+
+![Demo GIF](demo.gif)
+
 ## Features
 
 - **Advanced Natural Language Parsing**: Understands diverse phrasings
